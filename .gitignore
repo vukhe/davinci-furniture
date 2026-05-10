@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# Python
+ai-service/venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment (QUAN TRỌNG: không commit .env thật)
+.env
+backend/.env
+ai-service/.env
+!*.env.example
+
+# Thư mục crawling
+Scripts/crawler/chromedriver-win64/
+backend/loadtest.js
+
+# Editor
+.vscode/
+.idea/
+*.swp

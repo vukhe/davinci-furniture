@@ -1,0 +1,36 @@
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9
+
+# Vector store
+chromadb==0.5.3
+
+# Embeddings & NLP
+sentence-transformers==3.0.1
+torch==2.3.1
+transformers==4.42.4
+
+# Image search
+Pillow==10.4.0
+open-clip-torch==2.24.0
+timm>=0.9.16  # Fix deprecation warnings
+
+# Recommendation
+scikit-learn==1.5.1
+scipy==1.14.0
+pandas==2.2.2
+numpy==1.26.4
+rank-bm25==0.2.2
+
+# Forecasting
+prophet==1.1.5
+lightgbm==4.4.0
+
+# Database (connect sang SQL Server)
+pyodbc==5.1.0
+sqlalchemy==2.0.31
+
+# Utils
+pydantic==2.8.2
+python-dotenv==1.0.1
+httpx==0.27.0

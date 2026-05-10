@@ -1,0 +1,32 @@
+{
+  "name": "davinci-furniture",
+  "version": "1.0.0",
+  "description": "Davinci Furniture E-commerce Platform with AI Recommendations",
+  "private": true,
+  "scripts": {
+    "setup": "node setup.js",
+    "setup:db": "node setup-db.js",
+    "setup:ai": "python setup-ai.py",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:ai": "cd ai-service && python main.py",
+    "start": "node setup.js",
+    "build": "npm run build:backend && npm run build:frontend",
+    "build:backend": "cd backend && npm install",
+    "build:frontend": "cd frontend && npm run build"
+  },
+  "keywords": [
+    "furniture",
+    "e-commerce",
+    "ai",
+    "recommendations",
+    "nodejs",
+    "react"
+  ],
+  "author": "Davinci Team",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "mssql": "^12.5.0"
+  }
+}
