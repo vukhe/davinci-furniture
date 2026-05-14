@@ -18,8 +18,8 @@ def reciprocal_rank_fusion(
     dense_results:  list[dict],
     sparse_results: list[dict],
     k:              int   = 60,
-    dense_weight:   float = 0.6,
-    sparse_weight:  float = 0.4,
+    dense_weight:   float = 0.4,   # tăng lên cùng với cải thiện Dense document-expansion
+    sparse_weight:  float = 0.6,   # BM25 vẫn dẫn đầu nhưng giảm nhẹ để Dense có trọng số hơn
 ) -> list[dict]:
     """
     Merge 2 ranked lists bằng RRF — không cần normalize score.
@@ -37,7 +37,13 @@ def reciprocal_rank_fusion(
     rrf_scores: dict[str, float] = {}
     all_meta:   dict[str, dict]  = {}
 
-    for rank, item in enumerate(dense_results, start=1):
+    # Score gate: chỉ include Dense results có semantic_score đủ cao
+    # Tránh Dense results kém chất lượng kéo Hybrid xuống dưới BM25
+    MIN_DENSE_SCORE = 0.05  # giảm 0.15 → 0.05: tránh lọc mất kết quả Dense hợp lệ
+    dense_filtered = [x for x in dense_results
+                      if x.get("semantic_score", x.get("bm25_score", 1.0)) > MIN_DENSE_SCORE]
+
+    for rank, item in enumerate(dense_filtered, start=1):
         pid = str(item["product_id"])
         rrf_scores[pid] = rrf_scores.get(pid, 0.0) + dense_weight / (k + rank)
         all_meta[pid]   = item

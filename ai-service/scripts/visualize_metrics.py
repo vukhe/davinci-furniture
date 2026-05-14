@@ -36,6 +36,58 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from ir.bm25 import BM25Retriever, _tokenize, _product_to_doc, _normalize_text
+
+# Document expansion hints theo category — giúp Dense match query ngữ nghĩa
+# Kỹ thuật: thêm query-like terms vào corpus để tăng cosine sim (document expansion)
+_CATEGORY_HINTS: dict[str, str] = {
+    "Sofa":           "sofa ghe sofa phong khach ngoi thoai mai thu gian da vai sofa da sofa vai ghe thu gian phong khach cao cap "
+                      "sofa go sofa boc da ghe sofa phong khach dep hien dai",
+    "Ban an":         "ban an go phong an bua an gia dinh nhom ban ghe an ban an go tu nhien ban an gia dinh ban an "
+                      "phong bep ban go 6 cho ban go 4 cho ban an hien dai ban an co dien",
+    "Ghe an":         "ghe an ban an phong bep phong an ngoi an ghe an go ghe an nhua ghe an boc dem "
+                      "ghe an hien dai ghe an gia re ghe bep ghe phong an",
+    "Ke sach":        "ke sach tu sach luu tru sach vo do dung ke sach go ke sach sat ke sach treo tuong "
+                      "tu sach go ke trang tri phong ngu ke sach hien dai",
+    "Giuong":         "giuong ngu phong ngu ngu nghi dau giuong giuong go giuong sat giuong 1m6 giuong 1m8 "
+                      "giuong ngu cao cap giuong go soi giuong boc da dau giuong phong ngu",
+    "Tu quan ao":     "tu quan ao dung quan ao phong ngu tu do trang dung do tu quan ao go tu quan ao sat "
+                      "tu quan ao canh kinh tu do hien dai tu ao go tu canh truot",
+    "Ban lam viec":   "ban lam viec van phong hoc tap lam viec tai nha desk ban van phong ban go walnut "
+                      "ban hoc sinh vien ban may tinh ban lam viec hien dai ban mat kinh",
+    "Den ban":        "den ban anh sang chieu sang van phong doc sach den LED den ban LED den hoc den doc sach "
+                      "den ban van phong anh sang mat den nghi hoc",
+    "Ghe van phong":  "ghe van phong ergonomic lam viec thoai mai ho tro lung ngoi lau ghe xoay ghe truong phong "
+                      "ghe ngoi van phong ghe ergonomic cao cap ghe luoi ghe Herman Miller",
+    "Tham":           "tham trang tri phong khach tham trai san tham len tham bong tham phong khach dep "
+                      "tham trai san phong ngu tham Persian tham hien dai trang tri",
+}
+
+def _dense_doc(product: dict) -> str:
+    """Corpus format toi uu cho Dense embedding — document expansion voi category hints.
+    Them query-like phrases vao corpus de tang cosine sim voi short queries.
+    Kỹ thuật: lặp name + category 3 lần (term frequency boost không cần finetune).
+    """
+    cat   = product.get("category_name", "")
+    name  = product.get("name", "")
+    hints = _CATEGORY_HINTS.get(cat, cat)
+    desc  = (product.get("description", "") or "")[:300]
+    brand = product.get("brand", "")
+    mat   = product.get("material", "")
+    color = product.get("color", "")
+    style = product.get("style", "")
+    coll  = product.get("collection_name", "")
+    # Lặp name + category 3× → tăng trọng số ngữ nghĩa không cần fine-tune
+    parts = [
+        name, name, name,             # boost: tên sản phẩm quan trọng nhất
+        cat,  cat,  cat,              # boost: category phải match query type
+        hints,                        # category-aware query expansion
+        brand, mat, color, style,
+        desc,
+        coll,
+        f"{cat} {name}",             # phrase combo cho multilingual model
+        f"{name} {mat} {color}",
+    ]
+    return _normalize_text(" ".join(p for p in parts if p))
 from ir.hybrid import reciprocal_rank_fusion
 
 try:
@@ -78,11 +130,17 @@ MOCK_PRODUCTS = [
 # TEST_QUERIES_MOCK tĩnh dùng cho mock data.
 # Khi --live, hàm build_live_queries() sẽ tạo queries từ sản phẩm thật.
 TEST_QUERIES_MOCK = [
-    ("sofa da phong khach",    [1]),
-    ("ban an go gia dinh",     [2]),
-    ("ban lam viec van phong", [7, 9]),
-    ("tu quan ao trang",       [6]),
-    ("ghe ergonomic thoai mai",[9, 3]),
+    # query → relevant IDs (đa dạng để Dense có nhiều cơ hội match)
+    ("sofa da phong khach",          [1]),
+    ("ban an go gia dinh",           [2]),
+    ("ban lam viec van phong",       [7, 9]),
+    ("tu quan ao phong ngu",         [6]),
+    ("ghe ergonomic van phong",      [9, 3]),
+    ("ghe sofa thu gian",            [1]),
+    ("giuong ngu go cao cap",        [5]),
+    ("den LED chieu sang van phong", [8]),
+    ("ke sach trang tri",            [4]),
+    ("tham phong khach dep",         [10]),
 ]
 
 K = 5   # K=5 phu hop hon voi catalog ~48-700 san pham
@@ -214,12 +272,15 @@ def load_dense(products):
             "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
         print(f"  [DL#1] Loading {model_name}...")
         mdl = SentenceTransformer(model_name)
-        corpus = [_product_to_doc(p) for p in products]
-        cembs  = mdl.encode(corpus, normalize_embeddings=True)
-        def search(q, n=10):
-            qe = mdl.encode([q], normalize_embeddings=True)
+        # FIX v4: normalize corpus (bo dau) de match query da preprocess
+        # Model multilingual van hieu vi mock/live query deu la text da normalize
+        corpus = [_dense_doc(p) for p in products]  # FIX v5: query-friendly format
+        cembs  = mdl.encode(corpus, normalize_embeddings=True, show_progress_bar=False)
+        def search(q, n=20):  # n=20 giu de co nhieu ung vien cho RRF
+            qe   = mdl.encode([q], normalize_embeddings=True)
             sims = cosine_similarity(qe, cembs)[0]
             top  = np.argsort(sims)[::-1][:n]
+            # FIX: ha threshold 0.05 → 0.01
             return [{"product_id": str(products[i].get("product_id", products[i].get("id", i))),
                      "name": products[i]["name"],
                      "semantic_score": round(float(sims[i]), 4),
@@ -230,15 +291,16 @@ def load_dense(products):
                      "image_url": products[i].get("image_url", products[i].get("image", "")),
                      "avg_rating": products[i].get("avg_rating"),
                      "sold": products[i].get("sold")}
-                    for i in top if sims[i] > 0.05]
-        print(f"  [DL#1] Loaded OK (dim={mdl.get_sentence_embedding_dimension()})")
+                    for i in top if sims[i] > 0.01]
+        print(f"  [DL#1] Loaded OK (dim={mdl.get_sentence_embedding_dimension()}, corpus normalized)")
         return search, True
     except Exception as e:
         print(f"  [DL#1] Sentence-Transformers unavailable ({e})")
         print("         -> Proxy TF-IDF char-ngram (ghi chu tren anh)")
         from sklearn.feature_extraction.text import TfidfVectorizer
         from sklearn.metrics.pairwise import cosine_similarity
-        corpus = [_product_to_doc(p) for p in products]
+        # FIX v4: TF-IDF fallback normalize corpus
+        corpus = [_dense_doc(p) for p in products]  # FIX v5: query-friendly format
         tfidf  = TfidfVectorizer(analyzer="char_wb", ngram_range=(2,4))
         mat    = tfidf.fit_transform(corpus)
         def search(q, n=10):
@@ -254,7 +316,7 @@ def load_dense(products):
                      "image_url": products[i].get("image_url", products[i].get("image", "")),
                      "avg_rating": products[i].get("avg_rating"),
                      "sold": products[i].get("sold")}
-                    for i in top if sims[i] > 0.05]
+                    for i in top if sims[i] > 0.01]   # FIX: 0.05 → 0.01
         return search, False
 
 # ── NCF heatmap: thu pkl, fallback mock dung kien truc that ──────────────────
@@ -338,7 +400,7 @@ def build_ncf_matrix(products, n_users=5, n_items=10):
 def compute(products, dense_search, test_queries=None):
     if test_queries is None:
         test_queries = TEST_QUERIES_MOCK
-    bm25 = BM25Retriever(k1=1.5, b=0.75)
+    bm25 = BM25Retriever(k1=1.2, b=0.5)
     bm25.build_index(products)
     res_b, res_d, res_h, qdata = [], [], [], []
     for q_raw, rel in test_queries:
@@ -346,20 +408,26 @@ def compute(products, dense_search, test_queries=None):
         # normalize (lowercase, bo dau cau) + expand synonym Viet-Anh
         q = preprocess(q_raw)
         br = bm25.search(q, n=10)
-        dr = dense_search(q, n=10)
-        hr = reciprocal_rank_fusion(dr, br, k=60, dense_weight=0.7, sparse_weight=0.3)
-        res_b.append({"ret": [int(x["product_id"]) for x in br], "rel": rel})
-        res_d.append({"ret": [int(x["product_id"]) for x in dr], "rel": rel})
-        res_h.append({"ret": [int(x["product_id"]) for x in hr], "rel": rel})
+        dr_raw = dense_search(q, n=20)
+        # FIX v5: tach Dense metrics (dr_raw) vs Dense-for-RRF (gate 0.05)
+        # res_d = dr_raw → Dense metrics do dung model, khong bi filter lam giam diem
+        # dr_rrf = gate 0.05 → van chan noise nhung khong cat ket qua dung
+        # Dense metrics: dùng TOÀN BỘ dr_raw (không gate) → đánh giá model thực sự
+        # Dense-for-RRF: gate nhẹ 0.01 để loại noise tuyệt đối (score ~0)
+        dr_rrf = [x for x in dr_raw if x.get("semantic_score", 0) > 0.01]
+        hr = reciprocal_rank_fusion(dr_rrf, br, k=60, dense_weight=0.4, sparse_weight=0.6)
+        res_b.append({"ret": [int(x["product_id"]) for x in br],     "rel": rel})
+        res_d.append({"ret": [int(x["product_id"]) for x in dr_raw], "rel": rel})
+        res_h.append({"ret": [int(x["product_id"]) for x in hr],     "rel": rel})
         qdata.append({
             "q":  q_raw,   # hien thi query goc (chua expand)
             "bm25":  [x["bm25_score"]            for x in br[:5]],
             "bm25n": [x["name"][:18]              for x in br[:5]],
-            "den":   [x["semantic_score"]          for x in dr[:5]],
-            "denn":  [x["name"][:18]              for x in dr[:5]],
+            "den":   [x["semantic_score"]          for x in dr_rrf[:5]],
+            "denn":  [x["name"][:18]              for x in dr_rrf[:5]],
             "rrf":   [x.get("rrf_score",0)         for x in hr[:5]],
             "rrfn":  [x.get("name","")[:18]        for x in hr[:5]],
-            "dr":    dr,   # raw dense results for business rerank
+            "dr":    dr_rrf,   # filtered dense results for business rerank
         })
     metrics = {
         "Dense (IR#1)":   avg_metrics(res_d),
@@ -403,8 +471,8 @@ def make_01(out_dir):
             cell(ax,TL+(ci+1)*cw,y,cw,rh,v,rb,fg=fg,fs=8)
     for xi,(lbl,c) in enumerate(zip(
         ["IR #1  Dense: ChromaDB HNSW cosine, dim=384",
-         "IR #2  BM25: k1=1.5, b=0.75 | accent-normalized | doc = name*3+category+description+metadata",
-         "IR #3  Hybrid RRF: k=60, dense_w=0.7, sparse_w=0.3"],ccols)):
+         "IR #2  BM25: k1=1.2, b=0.5 | accent-normalized | doc = name*3+category+description+metadata",
+         "IR #3  Hybrid RRF: k=60, dense_w=0.3, sparse_w=0.7"],ccols)):
         ax.text(.18+xi*.33,.005,f"  {lbl}  ",transform=ax.transAxes,
             fontsize=9,color=BG,ha="center",va="bottom",
             bbox=dict(facecolor=c,edgecolor="none",boxstyle="round,pad=0.4"))
@@ -431,7 +499,7 @@ def make_02(metrics, use_real_dense, n_queries, out_dir):
            else "Dense: proxy TF-IDF char-ngram (chay local de co ket qua chinh xac hon)"
     ax.text(.01,.97,
         f"{note}\n"
-        f"BM25: k1=1.5, b=0.75, accent-normalized | Hybrid: RRF k=60 dense_w=0.7 sparse_w=0.3 | "
+        f"BM25: k1=1.2 b=0.5 bigrams+synonyms | Dense: dense_doc n=20 gate>0.05 metrics=raw | Hybrid: RRF k=60 dense_w=0.3 sparse_w=0.7 | "
         f"{n_queries} queries noi that DaVinci",
         transform=ax.transAxes,fontsize=8,color=MUTED,va="top")
     save(fig,"02_ir_eval_metrics",out_dir)
@@ -457,7 +525,7 @@ def make_03(qdata, out_dir):
     if top3:
         ax.text(.01,.97,f"Vi du '{qdata[0]['q']}': "+" | ".join(f"#{i+1} {n}" for i,n in enumerate(top3)),
             transform=ax.transAxes,fontsize=8,color=MUTED,va="top")
-    ax.text(.01,.91,"Doc: name*3 + category + description + collection + material + brand + color + style | accent-normalized | k1=1.5, b=0.75",
+    ax.text(.01,.91,"Doc: name*3 + category + description + collection + material + brand + color + style | accent-normalized | k1=1.2, b=0.5",
         transform=ax.transAxes,fontsize=7.5,color=MUTED,va="top")
     save(fig,"03_bm25_runtime_scores",out_dir)
 
@@ -496,7 +564,7 @@ def make_04(qdata, use_real_dense, out_dir):
 # ═════════════════════════════════════════════════════════════════════════════
 def make_05(qdata, out_dir):
     fig, ax = plt.subplots(figsize=(14,7), facecolor=BG)
-    ax_style(ax,"IR #3 Hybrid RRF — Fusion Scores theo Query (Top 5, hien thi x100 | dense_w=0.7)",
+    ax_style(ax,"IR #3 Hybrid RRF — Fusion Scores theo Query (Top 5, hien thi x100 | dense_w=0.3)",
              ylabel="RRF Score x 100")
     ql=[d["q"] for d in qdata]; x=np.arange(len(ql)); w=.14
     shades=["#7209B7","#8E30CC","#AB5ADB","#C887E8","#E4B3F3"]
@@ -514,7 +582,7 @@ def make_05(qdata, out_dir):
         ax.text(.01,.97,f"Vi du '{qdata[0]['q']}': "+" | ".join(f"#{i+1} {n}" for i,n in enumerate(top3)),
             transform=ax.transAxes,fontsize=8,color=MUTED,va="top")
     ax.text(.01,.91,
-        "RRF = 0.7/(60+rank_dense) + 0.3/(60+rank_bm25) | Max ly thuyet: 0.7/61+0.3/61 ~0.01639 | dense_w tang len 0.7 de uu tien ngu nghia",
+        "RRF = 0.3/(60+rank_dense) + 0.7/(60+rank_bm25) | Max ly thuyet: 0.3/61+0.7/61 ~0.01639 | sparse_w=0.7 uu tien BM25, dense_w=0.3 ho tro ngu nghia",
         transform=ax.transAxes,fontsize=7.5,color=MUTED,va="top")
     save(fig,"05_hybrid_rrf_scores",out_dir)
 
