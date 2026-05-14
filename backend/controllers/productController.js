@@ -63,7 +63,7 @@ exports.getProducts = async (req, res) => {
   } = req.query;
 
   const currentPage = Math.max(parseInt(page, 10) || 1, 1);
-  const pageSize = Math.min(Math.max(parseInt(limit, 10) || 24, 1), 48);
+  const pageSize = Math.min(Math.max(parseInt(limit, 10) || 24, 1), 800);
   const offset = (currentPage - 1) * pageSize;
   const conditions = ['p.is_active = 1'];
   const inputs = [];

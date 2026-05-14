@@ -157,7 +157,10 @@ router.get('/ai-proxy/search', async (req, res) => {
 router.get('/ai-proxy/search/autocomplete', async (req, res) => {
   const { q } = req.query;
   if (!q) return res.json({ suggestions: [] });
-  const suggestions = await aiCached(`ac:${q}`, () => aiService.getSearchAutocomplete(q, 6), 60_000);
+  const suggestions = await aiCached(`ac:${q}`, async () => {
+    const raw = await aiService.getSearchAutocomplete(q, 6);
+    return await enrichAI(raw, getPool());
+  }, 60_000);
   res.json({ query: q, suggestions });
 });
 

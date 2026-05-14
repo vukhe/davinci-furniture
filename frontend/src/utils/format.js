@@ -1,11 +1,12 @@
 // Format VND currency
 export const formatPrice = (amount) => {
-  if (!amount && amount !== 0) return '';
+  const value = Number(amount);
+  if (!Number.isFinite(value) || value <= 0) return 'Liên hệ';
   return new Intl.NumberFormat('vi-VN', {
     style: 'currency',
     currency: 'VND',
     maximumFractionDigits: 0,
-  }).format(amount);
+  }).format(value);
 };
 
 // Format date

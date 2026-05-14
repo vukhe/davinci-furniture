@@ -13,6 +13,8 @@ Kết hợp với Dense qua Hybrid RRF (ir/hybrid.py).
 
 import os
 import re
+import unicodedata
+import math
 from typing import Optional
 
 import httpx
@@ -21,22 +23,59 @@ from rank_bm25 import BM25Okapi
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:5000")
 
 
+def _safe_float(value, default=0.0):
+    try:
+        num = float(value)
+        return num if math.isfinite(num) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_optional_float(value):
+    if value in (None, ""):
+        return None
+    return _safe_float(value, None)
+
+
+def _safe_optional_int(value):
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 # ── Tokenizer ──────────────────────────────────────────────────────────────────
+
+def _normalize_text(text: str) -> str:
+    """Lowercase, bo dau tieng Viet, giu chu/so de BM25 match on dinh."""
+    text = unicodedata.normalize("NFD", str(text or ""))
+    text = "".join(c for c in text if unicodedata.category(c) != "Mn")
+    text = text.replace("đ", "d").replace("Đ", "D")
+    return text.lower().strip()
+
 
 def _tokenize(text: str) -> list[str]:
     """Lowercase + tách từ tiếng Việt/Anh. Giữ recall cao, không remove stopwords."""
-    text = text.lower().strip()
+    text = _normalize_text(text)
     text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
     text = re.sub(r"\s+", " ", text)
     return text.split()
 
 
 def _product_to_doc(product: dict) -> str:
-    """Ghép các field metadata thành document text để index."""
+    """Ghép các field metadata thành document text để index.
+    Thứ tự quan trọng: name (×3) > category > description > collection > material > brand > color > style
+    Description được truncate 300 ký tự để tránh dominates IDF.
+    """
+    desc_raw = product.get("description", "") or ""
+    desc = desc_raw[:300].strip()  # truncate tránh noise
+
     parts = [
         product.get("name", ""),
-        product.get("name", ""),          # lặp 2x để tăng trọng số tên
+        product.get("name", ""),          # lặp 3x để tăng trọng số tên
+        product.get("name", ""),
         product.get("category_name", ""),
+        desc,                             # FIX: thêm description
         product.get("collection_name", ""),
         product.get("material", ""),
         product.get("brand", ""),
@@ -87,18 +126,34 @@ class BM25Retriever:
     async def build_from_backend(self, limit: int = 2000):
         """Fetch từ backend rồi build index. Gọi trong lifespan startup."""
         try:
+            products = []
+            page = 1
+            per_page = min(limit, 48)
             async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(
-                    f"{BACKEND_URL}/api/products",
-                    params={"limit": limit, "page": 1},
-                )
-                resp.raise_for_status()
-                data = resp.json()
+                while len(products) < limit:
+                    resp = await client.get(
+                        f"{BACKEND_URL}/api/products",
+                        params={"limit": per_page, "page": page},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
 
-            products = (
-                data if isinstance(data, list)
-                else data.get("products", data.get("data", []))
-            )
+                    if isinstance(data, list):
+                        products.extend(data)
+                        break
+
+                    page_products = data.get("products", data.get("data", data.get("items", [])))
+                    if not page_products:
+                        break
+                    products.extend(page_products)
+
+                    pagination = data.get("pagination", {})
+                    total_pages = pagination.get("pages", 1)
+                    if page >= total_pages:
+                        break
+                    page += 1
+
+            products = products[:limit]
             if not products:
                 print("[BM25][WARN] Backend trả về 0 sản phẩm.")
                 return
@@ -134,13 +189,13 @@ class BM25Retriever:
                 "product_id": self.product_ids[idx],
                 "bm25_score": round(score, 4),
                 "name":       meta.get("name", ""),
-                "price":      float(meta.get("price", 0) or 0),
-                "sale_price": float(meta["sale_price"]) if meta.get("sale_price") else None,
+                "price":      _safe_float(meta.get("price"), 0.0),
+                "sale_price": _safe_optional_float(meta.get("sale_price")),
                 "category":   meta.get("category_name", meta.get("category", "")),
                 "material":   meta.get("material") or None,
                 "image_url":  meta.get("image_url", ""),
-                "avg_rating": float(meta["avg_rating"]) if meta.get("avg_rating") else None,
-                "sold":       int(meta["sold"]) if meta.get("sold") else None,
+                "avg_rating": _safe_optional_float(meta.get("avg_rating")),
+                "sold":       _safe_optional_int(meta.get("sold")),
             })
         return results
 

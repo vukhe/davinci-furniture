@@ -35,7 +35,7 @@ from matplotlib.colors import LinearSegmentedColormap
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from ir.bm25 import BM25Retriever, _tokenize, _product_to_doc
+from ir.bm25 import BM25Retriever, _tokenize, _product_to_doc, _normalize_text
 from ir.hybrid import reciprocal_rank_fusion
 
 try:
@@ -93,19 +93,39 @@ def build_live_queries(products: list[dict]) -> list[tuple]:
     Tự động tạo test queries từ sản phẩm thật:
     - Lấy 5 category có nhiều sản phẩm nhất
     - Mỗi category: dùng 1-2 từ khóa từ tên sản phẩm đầu tiên làm query
-    - Relevant = tất cả product_id trong category đó
+    - Relevant = san pham cung category va khop cac token query
 
-    Cách này đảm bảo BM25 và Dense LUÔN tìm thấy kết quả khớp
-    (vì query được sinh từ chính tên sản phẩm trong index).
+    Cach nay hop hon cho Search@K: khong bat top-5 bao phu ca category lon.
     """
     from collections import defaultdict
-    import unicodedata, re
+    import re
 
     def normalize(text: str) -> str:
         """Bỏ dấu tiếng Việt, lowercase."""
-        text = unicodedata.normalize("NFD", text)
-        text = "".join(c for c in text if unicodedata.category(c) != "Mn")
-        return re.sub(r"[^\w\s]", " ", text).lower().strip()
+        return re.sub(r"[^\w\s]", " ", _normalize_text(text), flags=re.UNICODE).strip()
+
+    def product_search_text(p: dict) -> str:
+        fields = [
+            p.get("name", ""),
+            p.get("category_name", ""),
+            p.get("description", ""),
+            p.get("material", ""),
+            p.get("brand", ""),
+            p.get("color", ""),
+            p.get("style", ""),
+        ]
+        return normalize(" ".join(str(x or "") for x in fields))
+
+    def query_relevance(query: str, prods: list[dict]) -> list[int]:
+        tokens = [t for t in query.split() if len(t) > 1]
+        rel = []
+        for p in prods:
+            text = product_search_text(p)
+            if tokens and all(t in text for t in tokens):
+                rel.append(int(p.get("product_id", p.get("id", 0))))
+        if not rel:
+            rel = [int(p.get("product_id", p.get("id", 0))) for p in prods[:5]]
+        return rel
 
     # Nhóm products theo category
     cat_map = defaultdict(list)
@@ -125,16 +145,21 @@ def build_live_queries(products: list[dict]) -> list[tuple]:
         name = p0.get("name", "")
         norm_name = normalize(name)
         # Lấy 2-3 từ đầu của tên (đủ để BM25/Dense match)
-        words = norm_name.split()[:3]
+        all_words = norm_name.split()
+        words = all_words[:3]
         if not words:
             words = [normalize(cat)]
         query = " ".join(words)
 
-        # Relevant = tất cả sản phẩm trong category này
-        relevant_ids = [int(p.get("product_id", p.get("id", 0))) for p in prods]
+        # Relevant = san pham cung category va khop cac token query.
+        relevant_ids = query_relevance(query, prods)
+        while len(relevant_ids) > 20 and len(words) < min(len(all_words), 5):
+            words.append(all_words[len(words)])
+            query = " ".join(words)
+            relevant_ids = query_relevance(query, prods)
 
         queries.append((query, relevant_ids))
-        print(f"  [Query] '{query}' -> relevant: {relevant_ids[:5]}{'...' if len(relevant_ids)>5 else ''}")
+        print(f"  [Query] '{query}' -> {len(relevant_ids)} relevant ids: {relevant_ids[:5]}{'...' if len(relevant_ids)>5 else ''}")
 
     return queries if queries else TEST_QUERIES_MOCK
 
@@ -378,7 +403,7 @@ def make_01(out_dir):
             cell(ax,TL+(ci+1)*cw,y,cw,rh,v,rb,fg=fg,fs=8)
     for xi,(lbl,c) in enumerate(zip(
         ["IR #1  Dense: ChromaDB HNSW cosine, dim=384",
-         "IR #2  BM25: k1=1.5, b=0.75 | doc = name*2+category+collection+material+brand+color+style",
+         "IR #2  BM25: k1=1.5, b=0.75 | accent-normalized | doc = name*3+category+description+metadata",
          "IR #3  Hybrid RRF: k=60, dense_w=0.7, sparse_w=0.3"],ccols)):
         ax.text(.18+xi*.33,.005,f"  {lbl}  ",transform=ax.transAxes,
             fontsize=9,color=BG,ha="center",va="bottom",
@@ -390,7 +415,7 @@ def make_01(out_dir):
 # ═════════════════════════════════════════════════════════════════════════════
 def make_02(metrics, use_real_dense, n_queries, out_dir):
     fig, ax = plt.subplots(figsize=(12,7), facecolor=BG)
-    ax_style(ax,f"IR Evaluation Metrics — Precision@{K} / Recall@{K} / NDCG@{K} / MRR  |  K={K}, query_processor ON",ylabel="Score")
+    ax_style(ax,f"IR Evaluation Metrics — Precision@{K} / Recall@{K} / NDCG@{K} / MRR  |  K={K}, query-specific relevance",ylabel="Score")
     mn=[f"Precision@{K}",f"Recall@{K}",f"NDCG@{K}","MRR"]
     x=np.arange(4); w=.22; offs=np.linspace(-w,w,3); colors=[C_IR1,C_IR2,C_IR3]
     for (meth,vals),c,off in zip(metrics.items(),colors,offs):
@@ -406,7 +431,7 @@ def make_02(metrics, use_real_dense, n_queries, out_dir):
            else "Dense: proxy TF-IDF char-ngram (chay local de co ket qua chinh xac hon)"
     ax.text(.01,.97,
         f"{note}\n"
-        f"BM25: k1=1.5, b=0.75 | Hybrid: RRF k=60 dense_w=0.7 sparse_w=0.3 | query_processor: normalize+expand | "
+        f"BM25: k1=1.5, b=0.75, accent-normalized | Hybrid: RRF k=60 dense_w=0.7 sparse_w=0.3 | "
         f"{n_queries} queries noi that DaVinci",
         transform=ax.transAxes,fontsize=8,color=MUTED,va="top")
     save(fig,"02_ir_eval_metrics",out_dir)
@@ -432,7 +457,7 @@ def make_03(qdata, out_dir):
     if top3:
         ax.text(.01,.97,f"Vi du '{qdata[0]['q']}': "+" | ".join(f"#{i+1} {n}" for i,n in enumerate(top3)),
             transform=ax.transAxes,fontsize=8,color=MUTED,va="top")
-    ax.text(.01,.91,"Doc: name*2 + category + collection + material + brand + color + style | k1=1.5, b=0.75",
+    ax.text(.01,.91,"Doc: name*3 + category + description + collection + material + brand + color + style | accent-normalized | k1=1.5, b=0.75",
         transform=ax.transAxes,fontsize=7.5,color=MUTED,va="top")
     save(fig,"03_bm25_runtime_scores",out_dir)
 
@@ -580,10 +605,12 @@ def make_08(products, qdata, out_dir):
         sem = float(item.get("semantic_score", 0))
         sample.append({"p": p, "sem": sem})
 
-    sem_c  = [min(s["sem"],1.0)*0.65                                 for s in sample]
-    rat_c  = [min(float(s["p"].get("avg_rating") or 0)/5.0,1.0)*0.15 for s in sample]
-    sold_c = [min(float(s["p"].get("sold") or 0)/500.0,1.0)*0.12     for s in sample]
-    disc_c = [(0.08 if s["p"].get("sale_price") else 0.0)             for s in sample]
+    # FIX: dung max_sold dong tu catalog, nhat quan voi routers/search.py rerank()
+    max_sold = max((float(s["p"].get("sold") or 0) for s in sample), default=1.0) or 1.0
+    sem_c  = [min(s["sem"],1.0)*0.65                                        for s in sample]
+    rat_c  = [min(float(s["p"].get("avg_rating") or 0)/5.0,1.0)*0.15       for s in sample]
+    sold_c = [min(float(s["p"].get("sold") or 0)/max_sold,1.0)*0.12        for s in sample]
+    disc_c = [(0.08 if s["p"].get("sale_price") else 0.0)                  for s in sample]
     biz    = [a+b+c+d for a,b,c,d in zip(sem_c,rat_c,sold_c,disc_c)]
     xlbls  = [f"P{s['p'].get('product_id', s['p'].get('id',0))}\n{s['p']['name'][:13]}" for s in sample]
 
@@ -685,17 +712,43 @@ def _normalize_product(p: dict) -> dict:
 
 
 def fetch_products(url):
+    """FIX: paginate qua tat ca trang — backend cap 48/page nen phai loop.
+    Tuong tu fetch_all_products() trong index_products.py.
+    """
     try:
         import httpx
-        r = httpx.get(f"{url}/api/products",
-                      params={"limit": 500, "page": 1, "ai": "true"}, timeout=15)
-        r.raise_for_status()
-        d  = r.json()
-        ps = d if isinstance(d, list) else d.get("data", d.get("products", d.get("items", [])))
-        if ps:
-            ps = [_normalize_product(p) for p in ps]
-            print(f"  [API] {len(ps)} products from backend")
-            return ps
+        all_products: list[dict] = []
+        page = 1
+        while True:
+            r = httpx.get(
+                f"{url}/api/products",
+                params={"limit": 48, "page": page},
+                timeout=15,
+            )
+            r.raise_for_status()
+            d = r.json()
+
+            if isinstance(d, list):
+                all_products.extend([_normalize_product(p) for p in d])
+                break
+
+            page_products = d.get("data", d.get("products", d.get("items", [])))
+            if not page_products:
+                break
+            all_products.extend([_normalize_product(p) for p in page_products])
+
+            pagination  = d.get("pagination", {})
+            total_pages = pagination.get("pages", 1)
+            total       = pagination.get("total", 0)
+            if page == 1:
+                print(f"  [API] {total} products across {total_pages} pages — paginating...")
+            if page >= total_pages:
+                break
+            page += 1
+
+        if all_products:
+            print(f"  [API] Fetched {len(all_products)} products total (all pages)")
+            return all_products
     except Exception as e:
         print(f"  [API] Backend unavailable ({e})")
     return None

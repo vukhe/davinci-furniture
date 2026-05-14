@@ -5,6 +5,7 @@
  */
 import { useState, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { formatPrice } from "../../utils/format";
 
 const AI_SERVICE_URL = import.meta.env.VITE_AI_SERVICE_URL || "http://localhost:8000";
 
@@ -204,7 +205,7 @@ export default function ImageSearchModal({ isOpen, onClose }) {
                     <div className="p-2">
                       <p className="text-xs font-medium text-stone-700 line-clamp-2 leading-tight">{product.name}</p>
                       <p className="text-xs text-davinci-gold font-semibold mt-1">
-                        {new Intl.NumberFormat("vi-VN").format(product.price)}₫
+                        {formatPrice(product.sale_price || product.price)}
                       </p>
                       <div className="mt-1 bg-stone-100 rounded-full h-1 overflow-hidden">
                         <div

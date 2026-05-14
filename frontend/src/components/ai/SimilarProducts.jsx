@@ -9,6 +9,7 @@
  */
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
+import { formatPrice } from "../../utils/format";
 
 const BASE = (import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
 
@@ -36,7 +37,7 @@ function ProductCard({ product }) {
           {product.name}
         </p>
         <p className="text-sm font-semibold text-davinci-gold mt-2">
-          {new Intl.NumberFormat("vi-VN").format(product.price)}₫
+          {formatPrice(product.sale_price || product.price)}
         </p>
       </div>
     </Link>

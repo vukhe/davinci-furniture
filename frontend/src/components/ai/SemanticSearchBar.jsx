@@ -6,6 +6,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDebounce } from "../../hooks/useDebounce";
+import { formatPrice } from "../../utils/format";
 
 const BACKEND = (import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
 
@@ -158,7 +159,7 @@ export default function SemanticSearchBar({ onResults, className = "", initialQu
               </div>
               <div className="text-right shrink-0">
                 <p className="text-sm font-medium text-davinci-gold">
-                  {new Intl.NumberFormat("vi-VN").format(product.price)}₫
+                  {formatPrice(product.sale_price || product.price)}
                 </p>
                 {product.score ? (
                   <p className="text-[10px] text-stone-300">

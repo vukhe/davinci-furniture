@@ -4,6 +4,7 @@ Semantic Search (Dense) + Hybrid Search (Dense + BM25 + RRF)
 """
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
+import math
 
 from dl.embedder import embed_text
 from models.query_processor import normalize_query, expand_query
@@ -39,11 +40,36 @@ class SearchResponse(BaseModel):
     filters_applied: dict
 
 
+def _safe_float(value, default=0.0):
+    try:
+        num = float(value)
+        return num if math.isfinite(num) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_optional_float(value):
+    if value in (None, ""):
+        return None
+    num = _safe_float(value, None)
+    return num
+
+
+def _safe_optional_int(value):
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 def rerank(items, sw=0.65, rw=0.15, soldw=0.12, dw=0.08):
+    # FIX: dung max_sold thuc te thay vi hardcode 500
+    # Tranh truong hop sp ban 50/500 chi dong gop 0.012 — qua thap
+    max_sold = max((_safe_float(i.get("sold"), 0.0) for i in items), default=1.0) or 1.0
     for item in items:
-        sem  = item.get("semantic_score", 0.0)
-        rat  = min(float(item.get("avg_rating") or 0) / 5.0, 1.0)
-        sold = min(float(item.get("sold") or 0) / 500.0, 1.0)
+        sem  = _safe_float(item.get("semantic_score"), 0.0)
+        rat  = min(_safe_float(item.get("avg_rating"), 0.0) / 5.0, 1.0)
+        sold = min(_safe_float(item.get("sold"), 0.0) / max_sold, 1.0)
         disc = 1.0 if item.get("sale_price") else 0.0
         item["business_score"] = round(sw*sem + rw*rat + soldw*sold + dw*disc, 4)
     return sorted(items, key=lambda x: x["business_score"], reverse=True)
@@ -53,15 +79,15 @@ def _parse_result(pid, meta, dist):
     return {
         "product_id":     pid,
         "name":           meta.get("name", ""),
-        "price":          float(meta.get("price", 0) or 0),
-        "sale_price":     float(meta["sale_price"]) if meta.get("sale_price") else None,
+        "price":          _safe_float(meta.get("price"), 0.0),
+        "sale_price":     _safe_optional_float(meta.get("sale_price")),
         "category":       meta.get("category", meta.get("category_name", "")),
         "material":       meta.get("material") or None,
         "image_url":      meta.get("image_url", ""),
-        "semantic_score": round(1 - dist, 4),
+        "semantic_score": round(1 - _safe_float(dist, 1.0), 4),
         "business_score": 0.0,
-        "avg_rating":     float(meta["avg_rating"]) if meta.get("avg_rating") else None,
-        "sold":           int(meta["sold"]) if meta.get("sold") else None,
+        "avg_rating":     _safe_optional_float(meta.get("avg_rating")),
+        "sold":           _safe_optional_int(meta.get("sold")),
     }
 
 
@@ -138,7 +164,7 @@ async def hybrid_search_endpoint(
 
     results = [SearchResult(
         product_id=str(i.get("product_id","")), name=i.get("name",""),
-        price=float(i.get("price",0) or 0), sale_price=i.get("sale_price"),
+        price=_safe_float(i.get("price"), 0.0), sale_price=_safe_optional_float(i.get("sale_price")),
         category=i.get("category",""), material=i.get("material"),
         image_url=i.get("image_url",""),
         semantic_score=i.get("semantic_score", i.get("rrf_score",0.0)),

@@ -13,6 +13,7 @@ Run:
 import os
 import sys
 import argparse
+import math
 from pathlib import Path
 
 import httpx
@@ -32,9 +33,18 @@ from ir.dense import (
     upsert_products_text,
 )
 
+
+def _safe_float(value, default=0.0):
+    try:
+        num = float(value)
+        return num if math.isfinite(num) else default
+    except (TypeError, ValueError):
+        return default
+
+
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:5000")
 BATCH_SIZE  = 32
-PAGE_SIZE   = 2000
+PAGE_SIZE   = 800
 
 def fetch_all_products() -> list[dict]:
     """Fetch ALL products from backend API with pagination."""
@@ -86,7 +96,7 @@ def _extract_metadata(product: dict) -> dict:
     """Extract normalized metadata for ChromaDB."""
     pid       = str(product.get("product_id") or product.get("id") or product.get("ProductID") or "")
     name      = str(product.get("name", product.get("ProductName", "")))
-    price     = float(product.get("price", product.get("Price", 0)) or 0)
+    price     = _safe_float(product.get("price", product.get("Price", 0)), 0.0)
     sale_price = product.get("sale_price")
     category  = str(product.get("category_name", product.get("CategoryName", "")))
     category_id = product.get("category_id") or product.get("CategoryID")
@@ -118,9 +128,13 @@ def _extract_metadata(product: dict) -> dict:
 
     # Only set if available (ChromaDB metadata values must be str/int/float/bool)
     if sale_price is not None:
-        meta["sale_price"] = float(sale_price)
+        sale_value = _safe_float(sale_price, None)
+        if sale_value is not None:
+            meta["sale_price"] = sale_value
     if avg_rating is not None:
-        meta["avg_rating"] = float(avg_rating)
+        rating_value = _safe_float(avg_rating, None)
+        if rating_value is not None:
+            meta["avg_rating"] = rating_value
 
     return meta
 

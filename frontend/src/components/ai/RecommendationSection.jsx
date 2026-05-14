@@ -10,6 +10,7 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useSelector } from "react-redux";
+import { formatPrice } from "../../utils/format";
 
 const BACKEND = (import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
 
@@ -26,7 +27,7 @@ async function fetchFallbackProducts(limit = 8) {
 }
 
 function ProductCard({ product }) {
-  const price = product.sale_price || product.price || 0;
+  const price = product.sale_price || product.price;
   const name = product.name || "";
   const image = product.image_url || product.image || "";
   const id = product.id || product.product_id;
@@ -54,7 +55,7 @@ function ProductCard({ product }) {
           {name}
         </p>
         <p className="text-sm font-semibold text-davinci-gold mt-2">
-          {new Intl.NumberFormat("vi-VN").format(price)}₫
+          {formatPrice(price)}
         </p>
       </div>
     </Link>

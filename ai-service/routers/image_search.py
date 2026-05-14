@@ -4,6 +4,7 @@ DL #2 — CLIP ViT-B-32: tìm kiếm sản phẩm bằng hình ảnh
 """
 from fastapi import APIRouter, UploadFile, File, Query, HTTPException
 from pydantic import BaseModel
+import math
 
 from dl.clip_encoder import embed_image_bytes, embed_text_clip
 from ir.dense import query_image
@@ -27,6 +28,14 @@ class ImageSearchResponse(BaseModel):
     mode: str
     results: list[ImageSearchResult]
     total: int
+
+
+def _safe_float(value, default=0.0):
+    try:
+        num = float(value)
+        return num if math.isfinite(num) else default
+    except (TypeError, ValueError):
+        return default
 
 
 @router.post("/by-image", response_model=ImageSearchResponse)
@@ -76,13 +85,13 @@ def _format_results(raw: dict, limit: int, mode: str) -> ImageSearchResponse:
 
     items = []
     for pid, meta, dist in zip(ids, metas, distances):
-        score = round(1 - dist, 4)
+        score = round(1 - _safe_float(dist, 1.0), 4)
         if score < 0.1:
             continue
         items.append(ImageSearchResult(
             product_id = pid,
             name       = meta.get("name", ""),
-            price      = float(meta.get("price", 0) or 0),
+            price      = _safe_float(meta.get("price"), 0.0),
             category   = meta.get("category", ""),
             image_url  = meta.get("image_url", ""),
             score      = score,
