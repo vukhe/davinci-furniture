@@ -191,7 +191,7 @@ python scripts/visualize_metrics.py
 python scripts/visualize_metrics.py --live --output-dir output
 ```
 
-> **Lưu ý `--live`:** Backend giới hạn 48 SP/page. Script tự động loop qua tất cả pages để lấy đủ toàn bộ catalog. Không cần cấu hình thêm.
+
 
 **9 ảnh output:**
 
@@ -207,7 +207,7 @@ python scripts/visualize_metrics.py --live --output-dir output
 | `08_business_reranking.png` | Breakdown 4 thành phần business score |
 | `09_clip_pipeline.png` | Luồng CLIP Image Search |
 
-> **Dense (ảnh 04):** Nếu `sentence-transformers` không load được, script fallback TF-IDF và ghi chú lên ảnh. Điểm Dense sẽ thấp hơn đáng kể khi dùng TF-IDF.
+.
 
 ---
 
