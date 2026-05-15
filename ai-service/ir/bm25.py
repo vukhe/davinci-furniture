@@ -74,6 +74,10 @@ def _tokenize(text: str) -> list[str]:
 
 # stopwords = ["va", "hoac", "nhung", "cac", "cho"]
 # tokens = [t for t in tokens if t not in stopwords]
+# Hệ thống chủ động không loại bỏ stopwords (từ dừng) nhằm giữ Recall (độ bao phủ) ở mức cao nhất, 
+# bảo toàn các nhu cầu truy vấn thực tế của khách hàng (Ví dụ: khách tìm kiếm cụm từ "bàn và ghế",
+#  từ "và" đóng vai trò liên kết giúp phân biệt với việc tìm kiếm riêng lẻ).
+
 
 def _product_to_doc(product: dict) -> str:
     """Ghép nối và phân cấp trọng số các trường thông tin của sản phẩm thành một văn bản tổng hợp."""
@@ -116,36 +120,7 @@ class BM25Retriever:
         self.metadatas:   list[dict]   = []   # Mảng lưu data gốc của sản phẩm để trả về khi khớp kết quả
         self.is_ready = False                 # Cờ trạng thái báo hiệu index đã dựng xong và sẵn sàng tìm kiếm
 
-    # TẦNG DỰNG CHỈ MỤC (BUILD INDEX)
-
-    def build_index(self, products: list[dict]):
-        """Xây dựng hoặc làm mới (Re-build) toàn bộ ma trận chỉ mục BM25 trên RAM."""
-        # Nếu danh sách sản phẩm rỗng, tiến hành xóa sạch bộ nhớ index hiện tại
-        if not products:
-            self.bm25 = None
-            self.product_ids = []
-            self.metadatas = []
-            self.is_ready = False
-            print("[BM25] Index cleared (empty product list).")
-            return
-
-        # Trích xuất và chuẩn hóa danh sách ID sản phẩm về dạng chuỗi (string)
-        self.product_ids = [
-            str(p.get("product_id") or p.get("id") or i)
-            for i, p in enumerate(products)
-        ]
-        # Lưu trữ danh sách dữ liệu gốc
-        self.metadatas = products
-        
-        # Biến đổi danh sách sản phẩm thành một ma trận các mảng từ (Corpus Tokenized)
-        corpus = [_tokenize(_product_to_doc(p)) for p in products]
-        # Xử lý phòng vệ: Nếu sản phẩm nào hoàn toàn trống chữ, thay bằng token ẩn để tránh lỗi thư viện
-        corpus = [doc if doc else ["[empty]"] for doc in corpus]
-
-        # Khởi tạo thuật toán tính toán điểm BM25Okapi với cấu hình tham số k1, b
-        self.bm25     = BM25Okapi(corpus, k1=self.k1, b=self.b)
-        self.is_ready = True
-        print(f"[BM25] Index updated: {len(products)} products, vocab={len(self.bm25.idf)} terms")
+    
 
     async def build_from_backend(self, limit: int = 2000):
         """Tải dữ liệu bất đồng bộ (Async) từ Backend API về và kích hoạt dựng index."""
@@ -193,6 +168,36 @@ class BM25Retriever:
 
         except Exception as exc:
             print(f"[BM25][WARN] Không thể fetch products: {exc}")
+    # TẦNG DỰNG CHỈ MỤC (BUILD INDEX)
+
+    def build_index(self, products: list[dict]):
+        """Xây dựng hoặc làm mới (Re-build) toàn bộ ma trận chỉ mục BM25 trên RAM."""
+        # Nếu danh sách sản phẩm rỗng, tiến hành xóa sạch bộ nhớ index hiện tại
+        if not products:
+            self.bm25 = None
+            self.product_ids = []
+            self.metadatas = []
+            self.is_ready = False
+            print("[BM25] Index cleared (empty product list).")
+            return
+
+        # Trích xuất và chuẩn hóa danh sách ID sản phẩm về dạng chuỗi (string)
+        self.product_ids = [
+            str(p.get("product_id") or p.get("id") or i)
+            for i, p in enumerate(products)
+        ]
+        # Lưu trữ danh sách dữ liệu gốc
+        self.metadatas = products
+        
+        # Biến đổi danh sách sản phẩm thành một ma trận các mảng từ (Corpus Tokenized)
+        corpus = [_tokenize(_product_to_doc(p)) for p in products]
+        # Xử lý phòng vệ: Nếu sản phẩm nào hoàn toàn trống chữ, thay bằng token ẩn để tránh lỗi thư viện
+        corpus = [doc if doc else ["[empty]"] for doc in corpus]
+
+        # Khởi tạo thuật toán tính toán điểm BM25Okapi với cấu hình tham số k1, b
+        self.bm25     = BM25Okapi(corpus, k1=self.k1, b=self.b)
+        self.is_ready = True
+        print(f"[BM25] Index updated: {len(products)} products, vocab={len(self.bm25.idf)} terms")        
 
     # TẦNG CẬP NHẬT THỜI GIAN THỰC (REAL-TIME MUTATION)
 
